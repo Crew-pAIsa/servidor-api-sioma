@@ -1,8 +1,8 @@
 # api_server.py
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status 
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional 
 import psycopg2
 import psycopg2.extras
 import os
@@ -25,6 +25,12 @@ class AsistenciaRecord(BaseModel):
     cedula: str
     timestamp: str
     tipo_evento: str
+
+class NuevoTrabajador(BaseModel):
+    cedula: str
+    nombre_completo: str
+    sede_id: int
+    embedding_b64: str
 
 # --- Función de Conexión a la Base de Datos ---
 def get_db_connection():
@@ -109,6 +115,47 @@ def get_trabajadores_por_sede(sede_id: int):
             
     conn.close()
     return trabajadores_con_embedding
+
+
+# --- ENDPOINT PARA SINCRONIZAR TRABAJADORES ---
+@app.post("/trabajador/sincronizar", status_code=status.HTTP_201_CREATED)
+def sincronizar_nuevo_trabajador(trabajador: NuevoTrabajador):
+    """
+    Recibe un nuevo trabajador desde el APK, lo crea en la base de datos
+    junto con su embedding biométrico. Usa una transacción para asegurar la integridad.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            # 1. Crear el trabajador y obtener su nuevo ID
+            cur.execute(
+                "INSERT INTO TRABAJADOR (nombre_completo, cedula, sede_id, activo) VALUES (%s, %s, %s, TRUE) RETURNING id",
+                (trabajador.nombre_completo, trabajador.cedula, trabajador.sede_id)
+            )
+            trabajador_id = cur.fetchone()[0]
+
+            # 2. Decodificar el embedding y guardarlo
+            embedding_bytes = base64.b64decode(trabajador.embedding_b64)
+            cur.execute(
+                "INSERT INTO EMBEDDING_BIOMETRICO (trabajador_id, embedding_data) VALUES (%s, %s)",
+                (trabajador_id, embedding_bytes)
+            )
+            
+            # 3. Confirmar la transacción
+            conn.commit()
+            
+            return {"mensaje": "Trabajador creado exitosamente", "trabajador_id": trabajador_id}
+
+    except psycopg2.IntegrityError:
+        # Esto sucede si la cédula ya existe
+        conn.rollback()
+        raise HTTPException(status_code=409, detail=f"La cédula '{trabajador.cedula}' ya existe.")
+    except Exception as e:
+        # Para cualquier otro error
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
+    finally:
+        conn.close()
 
 
 @app.post("/asistencia/sincronizar")
