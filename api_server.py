@@ -72,14 +72,32 @@ def get_trabajadores_por_sede(sede_id: int):
     """Devuelve todos los trabajadores de una sede, incluyendo su embedding facial."""
     conn = get_db_connection()
     trabajadores_con_embedding = []
+    
+    # --- CONSULTA SQL CORREGIDA USANDO JOIN ---
+    # Unimos TRABAJADOR (alias 't') con EMBEDDING_BIOMETRICO (alias 'eb')
+    # para obtener los datos de ambas tablas en una sola consulta.
+    sql_query = """
+        SELECT 
+            t.id, 
+            t.cedula, 
+            t.nombre_completo, 
+            eb.embedding_data AS embedding  -- Seleccionamos la columna correcta y le ponemos un alias
+        FROM 
+            TRABAJADOR t
+        JOIN 
+            EMBEDDING_BIOMETRICO eb ON t.id = eb.trabajador_id
+        WHERE 
+            t.sede_id = %s AND t.activo = TRUE;
+    """
+    
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        # ASUMO que tienes una tabla TRABAJADOR con una columna 'embedding' de tipo BYTEA
-        cur.execute("SELECT id, cedula, nombre_completo, embedding FROM TRABAJADOR WHERE sede_id = %s", (sede_id,))
+        cur.execute(sql_query, (sede_id,)) # <-- Ejecutamos la nueva consulta
         trabajadores = cur.fetchall()
+        
         for trab in trabajadores:
             embedding_b64 = None
+            # Ahora la columna se llama 'embedding' gracias al alias 'AS'
             if trab['embedding']:
-                # Convierte el embedding de bytes a texto (Base64) para poder enviarlo
                 embedding_b64 = base64.b64encode(trab['embedding']).decode('utf-8')
             
             trabajadores_con_embedding.append({
@@ -88,6 +106,7 @@ def get_trabajadores_por_sede(sede_id: int):
                 "nombre_completo": trab['nombre_completo'],
                 "embedding_b64": embedding_b64
             })
+            
     conn.close()
     return trabajadores_con_embedding
 
